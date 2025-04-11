@@ -24,7 +24,7 @@ class EarlyStopping:
         self.counter = 0
         self.best_score = None
         self.early_stop = False
-        self.val_acc_max = np.Inf
+        self.val_acc_max = np.inf
         self.delta = delta
         self.trace_func = trace_func
         self.save_all_checkpoint = save_all_checkpoint

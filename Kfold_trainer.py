@@ -9,7 +9,7 @@ from torch.autograd import Variable
 from torch.utils.data import TensorDataset, DataLoader
 
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, f1_score
 
 from model import Transformer
 from early_stop_tool import EarlyStopping
@@ -27,26 +27,28 @@ def test(model, test_loader, config):
     criterion = nn.CrossEntropyLoss()
     model.eval()
 
-    pred = []
-    label = []
-
+    pred = torch.tensor([], device=config.device)
+    label = torch.tensor([], device=config.device)
     test_loss = 0
 
     with torch.no_grad():
         for batch_idx, (data, target) in enumerate(test_loader):
             data = data.to(config.device)
             target = target.to(config.device)
-            data, target = Variable(data), Variable(target)
 
             output = model(data)
             test_loss += criterion(output, target.long()).item()
 
-            pred.extend(np.argmax(output.data.cpu().numpy(), axis=1))
-            label.extend(target.data.cpu().numpy())
+            pred_batch = torch.argmax(output, dim=1)
+            pred = torch.cat([pred, pred_batch])
+            label = torch.cat([label, target])
 
-        accuracy = accuracy_score(label, pred, normalize=True, sample_weight=None)
+        # 最后一次性将结果转CPU计算
+        accuracy = accuracy_score(label.cpu().numpy(), pred.cpu().numpy(), 
+                                normalize=True, sample_weight=None)
+        f1 = f1_score(label.cpu().numpy(), pred.cpu().numpy(), average='macro')
 
-    return accuracy, test_loss
+    return accuracy, test_loss, f1
 
 
 def train(save_all_checkpoint=False):
@@ -66,8 +68,10 @@ def train(save_all_checkpoint=False):
         y_train, y_test = labels[train_idx], labels[test_idx]
         train_set = TensorDataset(X_train, y_train)
         test_set = TensorDataset(X_test, y_test)
-        train_loader = DataLoader(dataset=train_set, batch_size=config.batch_size, shuffle=False)
-        test_loader = DataLoader(dataset=test_set, batch_size=config.batch_size, shuffle=False)
+        train_loader = DataLoader(dataset=train_set, batch_size=config.batch_size, shuffle=False,
+                              num_workers=2, pin_memory=False)
+        test_loader = DataLoader(dataset=test_set, batch_size=config.batch_size, shuffle=False,
+                              num_workers=2, pin_memory=False)
 
         model = Transformer(config)
         model = model.to(config.device)
@@ -78,7 +82,7 @@ def train(save_all_checkpoint=False):
         optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.01)
 
         # apply early_stop. If you want to view the full training process, set the save_all_checkpoint True
-        early_stopping = EarlyStopping(patience=20, verbose=True, save_all_checkpoint=save_all_checkpoint)
+        early_stopping = EarlyStopping(patience=10, verbose=True, save_all_checkpoint=save_all_checkpoint)
 
         # evaluating indicator
         train_ACC = []
@@ -98,7 +102,7 @@ def train(save_all_checkpoint=False):
             for batch_idx, (data, target) in loop:
                 data = data.to(config.device)
                 target = target.to(config.device)
-                data, target = Variable(data), Variable(target)
+                # PyTorch Tensors already support autograd, no need for Variable wrapper
 
                 optimizer.zero_grad()
                 output = model(data)
@@ -111,17 +115,17 @@ def train(save_all_checkpoint=False):
 
                 running_loss += loss.item()
 
-                train_acc_batch = np.sum(np.argmax(np.array(output.data.cpu()), axis=1) == np.array(target.data.cpu())) / (target.shape[0])
+                train_acc_batch = torch.sum(torch.argmax(output, dim=1) == target).item() / target.size(0)
                 loop.set_postfix(train_acc=train_acc_batch, loss=loss.item())
-                correct += np.sum(np.argmax(np.array(output.data.cpu()), axis=1) == np.array(target.data.cpu()))
+                correct += torch.sum(torch.argmax(output, dim=1) == target).item()
 
             train_acc = correct / len(train_loader.dataset)
-            test_acc, test_loss = test(model, test_loader, config)
-            val_acc, val_loss = test(model, val_loader, config)
+            test_acc, test_loss, test_f1 = test(model, test_loader, config)
+            val_acc, val_loss, val_f1 = test(model, val_loader, config)
             print('Epoch: ', epoch,
                   '| train loss: %.4f' % running_loss, '| train acc: %.4f' % train_acc,
-                  '| val acc: %.4f' % val_acc, '| val loss: %.4f' % val_loss,
-                  '| test acc: %.4f' % test_acc, '| test loss: %.4f' % test_loss)
+                  '| val acc: %.4f' % val_acc, '| val loss: %.4f' % val_loss, '| val f1: %.4f' % val_f1,
+                  '| test acc: %.4f' % test_acc, '| test loss: %.4f' % test_loss, '| test f1: %.4f' % test_f1)
 
             train_ACC.append(train_acc)
             train_LOSS.append(running_loss)

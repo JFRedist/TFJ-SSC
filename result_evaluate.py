@@ -58,12 +58,13 @@ def test(model, test_loader, config):
         for batch_idx, (data, target) in loop:
             data = data.to(config.device)
             target = target.to(config.device)
-            data, target = Variable(data), Variable(target)
 
             output = model(data)
 
-            pred.extend(np.argmax(output.data.cpu().numpy(), axis=1))
-            label.extend(target.data.cpu().numpy())
+            # 使用PyTorch计算预测结果
+            pred_batch = torch.argmax(output, dim=1)
+            pred.extend(pred_batch.cpu().numpy())
+            label.extend(target.cpu().numpy())
 
         accuracy = accuracy_score(label, pred, normalize=True, sample_weight=None)
         cohens_kappa = cohen_kappa_score(label, pred)

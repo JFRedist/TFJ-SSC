@@ -3,6 +3,7 @@ import numpy as np
 
 from scipy.fftpack import fft
 from scipy import signal
+from scipy.signal import windows
 from tqdm import tqdm
 
 from args import Path
@@ -10,7 +11,7 @@ from args import Path
 
 def data_array_concat(path_array):
     """concat data from each subject"""
-    dir_PSG = os.listdir(path_array)
+    dir_PSG = sorted(os.listdir(path_array))
     first = True
     print('Preparing dataset:')
     for f in tqdm(dir_PSG):
@@ -39,7 +40,7 @@ def spectrogram(x, window, n_overlap, nfft):
     num_win = int(np.floor((len_x - n_overlap) / (window - n_overlap)))
     spectrogram_data = []
     # Hamming window default
-    win = signal.hamming(window)
+    win = windows.hamming(window)
     for i in range(num_win):
         subdata = x[i * step: i * step + window]
         F = fft(subdata * win, n=nfft)

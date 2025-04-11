@@ -6,10 +6,10 @@ class Config(object):
     """args in model and trainer"""
     def __init__(self):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        self.num_fold = 10
+        self.num_fold = 5
         self.num_classes = 5
         self.num_epochs = 200               # Because early stopping is used, this parameter can be relatively large
-        self.batch_size = 64
+        self.batch_size = 512
         self.pad_size = 29                  # time dimension of TF image
         self.learning_rate = 5e-6
         self.dropout = 0.1                  # dropout rate in transformer encoder

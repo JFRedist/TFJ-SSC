@@ -32,16 +32,24 @@ def prepare_SleepEDF_20(path_PSG, path_hypnogram, save_path):
                              'Sleep stage 2': 3,
                              'Sleep stage R': 5}
 
-    dir_PSG = os.listdir(path_PSG)
-    dir_annotation = os.listdir(path_hypnogram)
+    def get_hypno_path(psg_path, hypno_dir):
+        file_id = os.path.basename(psg_path)[:6]
+        hypno_files = [f for f in os.listdir(hypno_dir) 
+                      if f.startswith(file_id) and "Hypnogram" in f]
+        if not hypno_files:
+            raise FileNotFoundError(f"找不到与 {psg_path} 匹配的Hypnogram文件")
+        return hypno_files[0]
 
-    for i, j in zip(dir_PSG, dir_annotation):
+    dir_PSG = [f for f in os.listdir(path_PSG) if "PSG" in f]
+    
+    for i in dir_PSG:
+        j = get_hypno_path(os.path.join(path_PSG, i), path_hypnogram)
         print('current file: ', i, j)
 
         PSG_file = os.path.join(path_PSG, i)
         annotation_file = os.path.join(path_hypnogram, j)
 
-        raw_train = mne.io.read_raw_edf(PSG_file, stim_channel='marker', misc=['rectal'])
+        raw_train = mne.io.read_raw_edf(PSG_file, stim_channel='marker', misc=['rectal'], preload=True)
         annotation_train = mne.read_annotations(annotation_file)
         raw_train.set_annotations(annotation_train, emit_warning=False)
 
