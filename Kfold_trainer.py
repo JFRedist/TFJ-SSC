@@ -5,7 +5,6 @@ from tqdm import tqdm
 import torch
 from torch import nn
 from torch import optim
-from torch.autograd import Variable
 from torch.utils.data import TensorDataset, DataLoader
 
 from sklearn.model_selection import StratifiedKFold
@@ -80,6 +79,29 @@ def train(save_all_checkpoint=False):
 
         # AdamW optimizer
         optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.01)
+        
+        # 初始化当前学习率
+        current_lr = config.learning_rate
+        
+        # 定义基于早停计数器的学习率调整函数
+        def adjust_learning_rate(optimizer, early_stopping, epoch, initial_lr=config.learning_rate):
+            """根据早停计数器状态调整学习率，模拟余弦退火效果"""
+            # 获取早停计数器的值
+            counter = early_stopping.counter
+            patience = early_stopping.patience
+            
+            # 计算余弦衰减因子 (0到1之间)
+            # 当counter增加时，衰减因子减小，学习率降低
+            decay_factor = 0.5 * (1 + np.cos(np.pi * 2* min(counter, patience) / patience))
+            
+            # 计算新的学习率
+            new_lr = config.lr_scheduler_eta_min + (initial_lr - config.lr_scheduler_eta_min) * decay_factor
+            
+            # 更新优化器中的学习率
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = new_lr
+                
+            return new_lr
 
         # apply early_stop. If you want to view the full training process, set the save_all_checkpoint True
         early_stopping = EarlyStopping(patience=10, verbose=True, save_all_checkpoint=save_all_checkpoint)
@@ -122,10 +144,15 @@ def train(save_all_checkpoint=False):
             train_acc = correct / len(train_loader.dataset)
             test_acc, test_loss, test_f1 = test(model, test_loader, config)
             val_acc, val_loss, val_f1 = test(model, val_loader, config)
+            
+            # 检查早停计数器并更新学习率
+            current_lr = adjust_learning_rate(optimizer, early_stopping, epoch)
+            
             print('Epoch: ', epoch,
                   '| train loss: %.4f' % running_loss, '| train acc: %.4f' % train_acc,
                   '| val acc: %.4f' % val_acc, '| val loss: %.4f' % val_loss, '| val f1: %.4f' % val_f1,
-                  '| test acc: %.4f' % test_acc, '| test loss: %.4f' % test_loss, '| test f1: %.4f' % test_f1)
+                  '| test acc: %.4f' % test_acc, '| test loss: %.4f' % test_loss, '| test f1: %.4f' % test_f1,
+                  '| lr: %.7f' % current_lr)
 
             train_ACC.append(train_acc)
             train_LOSS.append(running_loss)
@@ -134,8 +161,9 @@ def train(save_all_checkpoint=False):
             val_ACC.append(val_acc)
             val_LOSS.append(val_loss)
 
-            # Check whether to continue training. If save_all_checkpoint=False, the model name will be ‘model.pkl'
-            early_stopping(val_acc, model, path='./Kfold_models/fold{}/model_{}_epoch{}.pkl'.format(fold, fold, epoch))
+            # Check whether to continue training. If save_all_checkpoint=False, the model name will be 'model.pkl'
+            # 使用F1分数作为早停判断标准，而不是验证准确率
+            early_stopping(val_f1, model, path='./Kfold_models/fold{}/model_{}_epoch{}.pkl'.format(fold, fold, epoch))
 
             if early_stopping.early_stop:
                 print("Early stopping at epoch ", epoch)

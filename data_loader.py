@@ -10,7 +10,7 @@ from args import Config, Path
 
 def data_generator(path_labels, path_dataset):
     config = Config()
-    dir_annotation = os.listdir(path_labels)
+    dir_annotation = sorted(os.listdir(path_labels))
 
     first = True
     for f in dir_annotation:
