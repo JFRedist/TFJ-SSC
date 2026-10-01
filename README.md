@@ -21,11 +21,14 @@ Training uses 5-fold stratified cross-validation, AdamW (weight decay 0.01), ear
 
 ## Results (Sleep-EDF-78, 5-fold CV)
 
-| Accuracy | Cohen's κ | Macro-F1 | W | N1 | N2 | N3 | REM |
-|---|---|---|---|---|---|---|---|
-| 87.46 % | 0.827 | 83.05 % | 95.42 | 59.32 | 88.36 | 85.41 | 86.76 |
+| Protocol | Accuracy | Cohen's κ | Macro-F1 | W | N1 | N2 | N3 | REM |
+|---|---|---|---|---|---|---|---|---|
+| Subject-wise (`cv_mode = 'subject'`) | 78.81 ± 0.81 % | 0.710 ± 0.010 | 72.50 ± 0.99 % | 91.37 | 39.53 | 81.75 | 76.97 | 72.78 |
+| Epoch-wise (`cv_mode = 'epoch'`, thesis) | 87.46 % | 0.827 | 83.05 % | 95.42 | 59.32 | 88.36 | 85.41 | 86.76 |
 
-Per-class columns are F1 scores (%). Channel ablation results are in [`ablation/`](ablation/README.md).
+Overall metrics are averaged over folds (± standard deviation across the 5 folds); per-class columns are F1 scores (%) from the pooled confusion matrix. The subject-wise baseline was trained on an RTX 5070 with the thesis hyperparameters (66 minutes for all 5 folds; early stopping after 17–23 epochs per fold). Channel ablation results are in [`ablation/`](ablation/README.md).
+
+**Evaluation protocol.** The thesis results use *epoch-wise* cross-validation: 30-s epochs are split at random, so epochs of the same subject appear in both training and test sets. This overestimates performance by about 9 accuracy points and is not comparable with published results, which use subject-wise splits. The default is now `cv_mode = 'subject'`, where test folds and validation sets never share a subject with the training set (each fold: about 56 training, 7 validation and 15 test subjects).
 
 ![Training and validation accuracy, fold 2](docs/figures/training_fold2.png)
 
@@ -33,7 +36,11 @@ The trained weights were not kept, so none are included. To reproduce the result
 
 ## Requirements
 
-Python 3.10 or 3.11 and PyTorch 2.x with CUDA. The thesis results were trained on one RTX 4090 with batch size 448. With less GPU memory, lower `batch_size` in `args.py`.
+Python 3.10 or 3.11 and PyTorch 2.x with CUDA. The thesis results were trained on one RTX 4090 with batch size 448. With bf16 autocast (`use_amp = True`, the default), batch size 448 needs about 5 GB of GPU memory; on an RTX 5070 one training epoch takes about 40 s. RTX 50-series GPUs need a PyTorch build for CUDA 12.8 or newer:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+```
 
 ```bash
 pip install -r requirements.txt
@@ -44,8 +51,10 @@ pip install -r requirements.txt
 1. Download the `sleep-cassette` recordings of [Sleep-EDF Expanded](https://physionet.org/content/sleep-edfx/1.0.0/) (both `*-PSG.edf` and `*-Hypnogram.edf`) into `dataset/sleepEDF-78/sleep-cassette/`.
 2. `python dataset_prepare.py` moves the hypnograms to `dataset/sleepEDF-78/Hypnogram/` and extracts 30 s epochs of the three channels.
 3. `python data_preprocess_TF.py` computes the STFT images and normalizes each channel.
-4. `python Kfold_trainer.py` runs 5-fold cross-validation and saves models and curves to `Kfold_models/fold*/`.
+4. `python Kfold_trainer.py` runs 5-fold cross-validation and saves models, curves and the fold split to `Kfold_models/fold*/`.
 5. `python result_evaluate.py` prints the confusion matrix and metrics.
+
+Both scripts accept `--cv-mode subject|epoch` and `--folds 0 1 ...`; the trainer also accepts `--epochs` and `--batch-size`. A quick check that everything runs: `python Kfold_trainer.py --folds 0 --epochs 1`.
 
 Optional:
 
@@ -62,6 +71,8 @@ Hyperparameters are in `args.py`. Set `use_relative_pos = True` there to try rel
 - Learning-rate schedule tied to the early-stopping counter
 - Optional relative positional encoding (`relative_position.py`, `relative_transformer.py`)
 - Deterministic file order in preprocessing and data loading
+- Subject-wise cross-validation with subject-disjoint validation sets (`cv_mode`)
+- Training data reshuffled every epoch (upstream iterated in fixed recording order), bf16 autocast, float32 TF storage
 - Channel ablation variants (`ablation/`) and visualization scripts
 - Early CNN baseline experiments on raw signals (`experiments/early_simplesleepnet/`)
 

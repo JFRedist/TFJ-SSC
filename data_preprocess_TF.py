@@ -12,15 +12,8 @@ from args import Path
 def data_array_concat(path_array):
     """concat data from each subject"""
     dir_PSG = sorted(os.listdir(path_array))
-    first = True
     print('Preparing dataset:')
-    for f in tqdm(dir_PSG):
-        if first:
-            data_channel = np.load(os.path.join(path_array, f)).astype('float32')
-            first = False
-        else:
-            temp = np.load(os.path.join(path_array, f)).astype('float32')
-            data_channel = np.append(data_channel, temp, axis=0)
+    data_channel = np.concatenate([np.load(os.path.join(path_array, f)).astype('float32') for f in tqdm(dir_PSG)], axis=0)
     data_channel = np.squeeze(data_channel, axis=1)
     return data_channel
 
@@ -67,7 +60,9 @@ def data_normalize(dataset, channel):
                             else:
                                 dataset[i][j][k] = dataset[i][j][k-1]
 
-    dataset = (dataset - np.mean(dataset)) / np.std(dataset)
+    # statistics in float64 for accuracy, storage in float32 (halves disk and RAM)
+    mean, std = np.mean(dataset, dtype=np.float64), np.std(dataset, dtype=np.float64)
+    dataset = ((dataset - mean) / std).astype(np.float32)
 
     ans1 = np.isinf(dataset)
     ans2 = np.isnan(dataset)
@@ -87,7 +82,7 @@ if __name__ == '__main__':
     for channel in ['EEG_Fpz-Cz', 'EEG_Pz-Oz', 'EOG']:
         print('-' * 15, 'Processing channel:{}'.format(channel), '-' * 15)
         data_channel = data_array_concat(path_array=os.path.join(path.path_raw_data, channel))
-        X = np.zeros([data_channel.shape[0], 29, int(nfft / 2)])
+        X = np.zeros([data_channel.shape[0], 29, int(nfft / 2)], dtype=np.float32)
         print('Transform to TF images:')
         for i in tqdm(range(data_channel.shape[0])):
             Xi = spectrogram(data_channel[i, :], win_size * fs, overlap * fs, nfft)

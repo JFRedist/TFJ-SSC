@@ -1,16 +1,14 @@
+import argparse
 import numpy as np
 from tqdm import tqdm
 
 from sklearn.metrics import recall_score, accuracy_score, f1_score, cohen_kappa_score
 from sklearn.metrics import confusion_matrix
-from sklearn.model_selection import StratifiedKFold
 
 import torch
-from torch.utils.data import TensorDataset, DataLoader
-from torch.autograd import Variable
 
 from model import Transformer
-from data_loader import data_generator
+from data_loader import load_dataset, get_folds, iterate_batches
 from args import Config, Path
 
 
@@ -47,15 +45,17 @@ def class_wise_evaluate(con_mat):
     return class_wise_mat
 
 
-def test(model, test_loader, config):
+def test(model, dataset, labels, idx, config):
     model.eval()
 
     pred = []
     label = []
 
-    with torch.no_grad():
-        loop = tqdm(enumerate(test_loader), total=len(test_loader))
-        for batch_idx, (data, target) in loop:
+    amp = torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=config.use_amp and config.device.type == 'cuda')
+    with torch.no_grad(), amp:
+        n_batches = (len(idx) + config.batch_size - 1) // config.batch_size
+        loop = tqdm(iterate_batches(dataset, labels, idx, config.batch_size), total=n_batches)
+        for data, target in loop:
             data = data.to(config.device)
             target = target.to(config.device)
 
@@ -75,15 +75,15 @@ def test(model, test_loader, config):
         print('ACC: %.4f' % accuracy, 'k: %.4f' % cohens_kappa, 'MF1: %.4f' % macro_f1,
               'Sens: %.4f' % average_sensitivity, 'Spec: %.4f' % average_specificity)
 
-        con_mat = confusion_matrix(label, pred)
+        con_mat = confusion_matrix(label, pred, labels=list(range(5)))
 
     return accuracy, cohens_kappa, macro_f1, average_sensitivity, average_specificity, con_mat
 
 
-def evaluate(config, path):
-    dataset, labels, val_loader = data_generator(path_labels=path.path_labels, path_dataset=path.path_TF)
-
-    kf = StratifiedKFold(n_splits=config.num_fold, shuffle=True, random_state=0)
+def evaluate(config, path, folds_to_run=None):
+    dataset, labels, subjects = load_dataset(path_labels=path.path_labels, path_dataset=path.path_TF)
+    folds = get_folds(labels, subjects, config)
+    print('cv_mode:', config.cv_mode)
 
     ACC = 0
     Kappa = 0
@@ -91,25 +91,29 @@ def evaluate(config, path):
     Sens = 0
     Spec = 0
     Confusion_mat = np.zeros([5, 5])
+    n_eval = 0
 
-    for fold, (train_idx, test_idx) in enumerate(kf.split(dataset, labels)):
+    for fold, split in enumerate(folds):
+        if folds_to_run is not None and fold not in folds_to_run:
+            continue
         print('-' * 15, '>', f'Fold {fold}', '<', '-' * 15)
 
         path_model = './Kfold_models/fold{}/model.pkl'.format(fold)
 
-        _, X_test = dataset[train_idx], dataset[test_idx]
-        _, y_test = labels[train_idx], labels[test_idx]
-        test_set = TensorDataset(X_test, y_test)
-        test_loader = DataLoader(dataset=test_set, batch_size=config.batch_size, shuffle=False)
+        # the split saved by the trainer must match the one recomputed here
+        saved = np.load('./Kfold_models/fold{}/split.npz'.format(fold))
+        assert np.array_equal(saved['test'], split['test']), 'fold split differs from training (check cv_mode / num_fold / seed)'
+        test_idx = split['test']
 
-        print('train_set: ', len(train_idx))
+        print('train_set: ', len(split['train']))
         print('test_set: ', len(test_idx))
 
         model = Transformer(config)
         model = model.to(config.device)
-        model.load_state_dict(torch.load(path_model), strict=True)
+        model.load_state_dict(torch.load(path_model, map_location=config.device), strict=True)
 
-        accuracy, cohens_kappa, macro_f1, average_sensitivity, average_specificity, con_mat = test(model, test_loader, config)
+        accuracy, cohens_kappa, macro_f1, average_sensitivity, average_specificity, con_mat = test(model, dataset, labels, test_idx, config)
+        n_eval += 1
 
         ACC += accuracy
         Kappa += cohens_kappa
@@ -121,11 +125,11 @@ def evaluate(config, path):
 
         del model
 
-    ACC /= config.num_fold
-    Kappa /= config.num_fold
-    MF1 /= config.num_fold
-    Sens /= config.num_fold
-    Spec /= config.num_fold
+    ACC /= n_eval
+    Kappa /= n_eval
+    MF1 /= n_eval
+    Sens /= n_eval
+    Spec /= n_eval
 
     class_wise_result = class_wise_evaluate(Confusion_mat)
 
@@ -133,10 +137,17 @@ def evaluate(config, path):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--folds', type=int, nargs='+', help='only evaluate these folds (default: all)')
+    parser.add_argument('--cv-mode', choices=['subject', 'epoch'], help='override Config.cv_mode')
+    args = parser.parse_args()
+
     config = Config()
+    if args.cv_mode is not None:
+        config.cv_mode = args.cv_mode
     path = Path()
 
-    ACC, Kappa, MF1, Sens, Spec, Confusion_mat, class_wise_result = evaluate(config=config, path=path)
+    ACC, Kappa, MF1, Sens, Spec, Confusion_mat, class_wise_result = evaluate(config=config, path=path, folds_to_run=args.folds)
 
     print('ACC: ', ACC)
     print('Cohen\'s Kappa: ', Kappa)

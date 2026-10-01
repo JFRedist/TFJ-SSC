@@ -25,6 +25,13 @@ class Config(object):
         self.lr_scheduler_eta_min = 1e-7   # 学习率下限
         self.dynamic_lr_schedule = True    # 是否使用动态学习率调度（根据早停指标调整）
         self.lr_patience_ratio = 2.0       # 动态学习率周期与早停patience的比例
+        # Evaluation protocol:
+        #   'subject': folds, and the validation set inside each fold, never share a subject (comparable with the literature)
+        #   'epoch':   30-s epochs are split at random, as in the thesis (subjects leak across train/val/test)
+        self.cv_mode = 'subject'
+        self.val_ratio = 0.1                # subject mode: fraction of training subjects held out for validation
+        self.seed = 0
+        self.use_amp = True                 # bf16 autocast on CUDA
 
 
 class Path(object):
