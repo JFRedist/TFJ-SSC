@@ -1,0 +1,9 @@
+torch>=2.1
+numpy
+scipy
+scikit-learn
+mne
+matplotlib
+tqdm
+# only for experiments/early_simplesleepnet
+tensorboard

@@ -1,0 +1,23 @@
+# data (download from PhysioNet, see README)
+dataset/
+data/
+
+# training outputs
+Kfold_models/
+figures/
+training_plots/
+runs/
+*.pkl
+*.pth
+*.npy
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
