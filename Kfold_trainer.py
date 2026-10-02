@@ -54,7 +54,20 @@ def test(model, dataset, labels, idx, config):
     return accuracy, test_loss, f1
 
 
-def train(config, folds_to_run=None, save_all_checkpoint=False):
+def apply_recipe(config, recipe):
+    """Training recipes: 'thesis' = TFJ-SSC (default Config), 'mcsn' = upstream MultiChannelSleepNet settings."""
+    if recipe == 'mcsn':
+        config.num_encoder = 16
+        config.num_encoder_multi = 4
+        config.batch_size = 64
+        config.learning_rate = 5e-6
+        config.early_stop_metric = 'acc'
+        config.early_stop_patience = 20
+        config.dynamic_lr_schedule = False
+    return config
+
+
+def train(config, folds_to_run=None, save_all_checkpoint=False, out_dir='./Kfold_models'):
     path = Path()
 
     dataset, labels, subjects = load_dataset(path_labels=path.path_labels, path_dataset=path.path_TF)
@@ -65,7 +78,7 @@ def train(config, folds_to_run=None, save_all_checkpoint=False):
         if folds_to_run is not None and fold not in folds_to_run:
             continue
         print('\n', '-' * 15, '>', f'Fold {fold}', '<', '-' * 15)
-        fold_dir = './Kfold_models/fold{}'.format(fold)
+        fold_dir = os.path.join(out_dir, 'fold{}'.format(fold))
         os.makedirs(fold_dir, exist_ok=True)
         np.savez(os.path.join(fold_dir, 'split.npz'), **split)
 
@@ -108,7 +121,7 @@ def train(config, folds_to_run=None, save_all_checkpoint=False):
             return new_lr
 
         # apply early_stop. If you want to view the full training process, set the save_all_checkpoint True
-        early_stopping = EarlyStopping(patience=10, verbose=True, save_all_checkpoint=save_all_checkpoint)
+        early_stopping = EarlyStopping(patience=config.early_stop_patience, verbose=True, save_all_checkpoint=save_all_checkpoint)
 
         # evaluating indicator
         train_ACC = []
@@ -152,7 +165,8 @@ def train(config, folds_to_run=None, save_all_checkpoint=False):
             val_acc, val_loss, val_f1 = test(model, dataset, labels, val_idx, config)
 
             # 检查早停计数器并更新学习率
-            current_lr = adjust_learning_rate(optimizer, early_stopping, epoch)
+            if config.dynamic_lr_schedule:
+                current_lr = adjust_learning_rate(optimizer, early_stopping, epoch)
 
             print('Epoch: ', epoch,
                   '| train loss: %.4f' % running_loss, '| train acc: %.4f' % train_acc,
@@ -169,7 +183,7 @@ def train(config, folds_to_run=None, save_all_checkpoint=False):
 
             # Check whether to continue training. If save_all_checkpoint=False, the model name will be 'model.pkl'
             # 使用F1分数作为早停判断标准，而不是验证准确率
-            early_stopping(val_f1, model, path=os.path.join(fold_dir, 'model_{}_epoch{}.pkl'.format(fold, epoch)))
+            early_stopping(val_f1 if config.early_stop_metric == 'f1' else val_acc, model, path=os.path.join(fold_dir, 'model_{}_epoch{}.pkl'.format(fold, epoch)))
 
             if early_stopping.early_stop:
                 print("Early stopping at epoch ", epoch)
@@ -189,9 +203,12 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, help='override Config.num_epochs')
     parser.add_argument('--cv-mode', choices=['subject', 'epoch'], help='override Config.cv_mode')
     parser.add_argument('--batch-size', type=int, help='override Config.batch_size')
+    parser.add_argument('--recipe', choices=['thesis', 'mcsn'], default='thesis',
+                        help="'thesis' = TFJ-SSC settings, 'mcsn' = upstream MultiChannelSleepNet settings")
+    parser.add_argument('--out-dir', default='./Kfold_models', help='where fold models and curves are saved')
     args = parser.parse_args()
 
-    config = Config()
+    config = apply_recipe(Config(), args.recipe)
     if args.epochs is not None:
         config.num_epochs = args.epochs
     if args.cv_mode is not None:
@@ -199,5 +216,8 @@ if __name__ == '__main__':
     if args.batch_size is not None:
         config.batch_size = args.batch_size
 
+    print('recipe:', args.recipe, '| layers %d/%d | batch %d | lr %g | early stop on %s, patience %d | lr schedule: %s' % (
+        config.num_encoder, config.num_encoder_multi, config.batch_size, config.learning_rate,
+        config.early_stop_metric, config.early_stop_patience, config.dynamic_lr_schedule))
     set_random_seed(config.seed)
-    train(config, folds_to_run=args.folds, save_all_checkpoint=False)
+    train(config, folds_to_run=args.folds, save_all_checkpoint=False, out_dir=args.out_dir)

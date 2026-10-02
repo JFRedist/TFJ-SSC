@@ -28,10 +28,37 @@ class Config(object):
         # Evaluation protocol:
         #   'subject': folds, and the validation set inside each fold, never share a subject (comparable with the literature)
         #   'epoch':   30-s epochs are split at random, as in the thesis (subjects leak across train/val/test)
+        self.early_stop_metric = 'f1'       # 'f1' (validation macro-F1, thesis) or 'acc' (validation accuracy, upstream)
+        self.early_stop_patience = 10
         self.cv_mode = 'subject'
         self.val_ratio = 0.1                # subject mode: fraction of training subjects held out for validation
         self.seed = 0
         self.use_amp = True                 # bf16 autocast on CUDA
+
+
+class SeqConfig(Config):
+    """Slim epoch encoder + inter-epoch sequence Transformer (seq_trainer.py)"""
+    def __init__(self):
+        super().__init__()
+        self.seq_len = 15                   # epochs per input sequence (1 = no inter-epoch context)
+        self.epochs_per_batch = 480         # sequences per batch = epochs_per_batch // seq_len (32 for L = 15)
+        self.seq_eval_stride = 5            # window stride at evaluation (capped at seq_len); overlapping predictions are averaged
+        self.slim_num_encoder = 2           # encoder layers per channel (shared across channels)
+        self.slim_num_encoder_multi = 2     # encoder layers in the multi-channel fusion block
+        self.slim_forward_hidden = 512      # FFN size of the per-channel encoder (fusion block uses 2x)
+        self.seq_dim = 128                  # epoch embedding size fed to the sequence encoder
+        self.seq_num_encoder = 2            # encoder layers across epochs
+        self.learning_rate = 3e-4           # chosen on validation MF1 (3e-4 to 5e-4 equally good; runs A/B/C used 1e-4)
+        self.class_weighting = 'none'       # 'none' or 'inv_sqrt' (weights ~ 1/sqrt(class frequency))
+        # learning-rate schedule:
+        #   'restart' (thesis): cosine down to eta_min and back up, driven by the early-stopping counter
+        #   'plateau': multiply by plateau_factor after every plateau_patience epochs without improvement, never back up
+        #   'cosine':  cosine decay to eta_min over cosine_epochs, then stop (early stopping only selects the checkpoint)
+        self.lr_schedule = 'restart'
+        self.warmup_epochs = 0              # linear warmup per step over the first warmup_epochs epochs
+        self.plateau_factor = 0.3
+        self.plateau_patience = 3
+        self.cosine_epochs = 40
 
 
 class Path(object):

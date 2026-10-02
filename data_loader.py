@@ -8,23 +8,27 @@ from sklearn.model_selection import train_test_split, StratifiedKFold, Stratifie
 from args import Config, Path
 
 
-def load_dataset(path_labels, path_dataset):
+def load_dataset(path_labels, path_dataset, return_records=False):
     """Load all TF images and labels.
 
     Returns:
         dataset (Tensor float32): N x 3 x 29 x 128 (EEG Fpz-Cz, EEG Pz-Oz, EOG)
         labels (Tensor int64): N
         subjects (ndarray): subject ID of every epoch, parsed from the record name SC4ssN.. (ss = subject, N = night)
+        records (ndarray, only if return_records): index of the recording (night) of every epoch; epochs of one
+            recording are contiguous and in temporal order
     """
     dir_annotation = sorted(os.listdir(path_labels))
 
-    labels, subjects = [], []
-    for f in dir_annotation:
+    labels, subjects, records = [], [], []
+    for r, f in enumerate(dir_annotation):
         y = np.load(os.path.join(path_labels, f))
         labels.append(y)
         subjects.append(np.full(len(y), int(f[3:5])))
+        records.append(np.full(len(y), r))
     labels = torch.from_numpy(np.concatenate(labels)).long()
     subjects = np.concatenate(subjects)
+    records = np.concatenate(records)
 
     channels = []
     for name in ['TF_EEG_Fpz-Cz_mean_std.npy', 'TF_EEG_Pz-Oz_mean_std.npy', 'TF_EOG_mean_std.npy']:
@@ -34,6 +38,8 @@ def load_dataset(path_labels, path_dataset):
 
     assert len(dataset) == len(labels), 'TF data and labels are misaligned'
     print('dataset:', tuple(dataset.shape), '| subjects:', len(np.unique(subjects)), '| records:', len(dir_annotation))
+    if return_records:
+        return dataset, labels, subjects, records
     return dataset, labels, subjects
 
 
@@ -73,6 +79,45 @@ def iterate_batches(dataset, labels, idx, batch_size, shuffle=False, generator=N
     for start in range(0, len(idx), batch_size):
         b = torch.from_numpy(idx[start:start + batch_size])
         yield dataset[b], labels[b]
+
+
+def record_ranges(idx, records):
+    """[start, end) global index ranges of every recording contained in a split (splits hold whole recordings)."""
+    idx = np.sort(idx)
+    cuts = np.flatnonzero(np.diff(records[idx]) != 0) + 1
+    segments = np.split(idx, cuts)
+    assert all(seg[-1] - seg[0] + 1 == len(seg) for seg in segments), 'split contains partial recordings (use cv_mode subject)'
+    return [(seg[0], seg[-1] + 1) for seg in segments]
+
+
+def sequence_starts(ranges, seq_len, stride=None, generator=None):
+    """Start indices of length-seq_len windows inside each recording.
+
+    Training (stride=None): non-overlapping windows with a random offset per recording, so every epoch is used
+    about once per training epoch and the window borders move between training epochs.
+    Evaluation (stride=k): windows every k epochs plus one aligned to the end, so every epoch is covered.
+    """
+    starts = []
+    for s, e in ranges:
+        n = e - s
+        assert n >= seq_len, 'recording shorter than seq_len'
+        if stride is None:
+            offset = int(torch.randint(0, seq_len, (1,), generator=generator)) if n > seq_len else 0
+            starts.append(np.arange(s + min(offset, n - seq_len), e - seq_len + 1, seq_len))
+        else:
+            st = np.arange(s, e - seq_len + 1, stride)
+            starts.append(np.unique(np.append(st, e - seq_len)))
+    return np.concatenate(starts)
+
+
+def iterate_sequences(dataset, labels, starts, seq_len, batch_size, shuffle=False, generator=None):
+    """Yield (data, target, index) batches: data (B, L, 3, 29, 128), target and index (B, L)."""
+    if shuffle:
+        starts = starts[torch.randperm(len(starts), generator=generator).numpy()]
+    offsets = np.arange(seq_len)
+    for i in range(0, len(starts), batch_size):
+        index = torch.from_numpy(starts[i:i + batch_size, None] + offsets)
+        yield dataset[index], labels[index], index
 
 
 def data_generator(path_labels, path_dataset):
